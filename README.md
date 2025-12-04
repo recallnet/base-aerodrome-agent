@@ -1,4 +1,4 @@
-# Aerodrome (Base) Trading Agent
+# AI Trading Agent for Aerodrome DEX | Autonomous DeFi Trading on Base
 
 An autonomous spot trading agent for [Aerodrome DEX](https://aerodrome.finance/) on Base chain, built with the [Mastra](https://mastra.ai) AI framework.
 
