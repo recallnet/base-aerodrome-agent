@@ -105,7 +105,10 @@ describe('PerformanceTracker', () => {
       // Sell 50 AERO at $0.80 = $40 proceeds
       // Cost basis for 50 AERO = 50 * $0.65 = $32.50
       // Realized P&L = $40 - $32.50 = $7.50
-      const { position, realizedPnl } = await performanceTracker.recordSell('AERO', 50, 40)
+      const result = await performanceTracker.recordSell('AERO', 50, 40)
+
+      expect(result).not.toBeNull()
+      const { position, realizedPnl } = result!
 
       expect(realizedPnl).toBeCloseTo(7.5, 2)
       expect(parseFloat(position.balance)).toBe(50)
@@ -126,7 +129,10 @@ describe('PerformanceTracker', () => {
       // Sell 100 AERO at $0.65 = $65 proceeds
       // Cost basis = $80
       // Realized P&L = $65 - $80 = -$15
-      const { position, realizedPnl } = await performanceTracker.recordSell('AERO', 100, 65)
+      const result = await performanceTracker.recordSell('AERO', 100, 65)
+
+      expect(result).not.toBeNull()
+      const { position, realizedPnl } = result!
 
       expect(realizedPnl).toBeCloseTo(-15, 2)
       expect(parseFloat(position.balance)).toBe(0)
@@ -146,10 +152,9 @@ describe('PerformanceTracker', () => {
       )
     })
 
-    it('should throw error when selling token not owned', async () => {
-      await expect(performanceTracker.recordSell('NONEXISTENT', 50, 40)).rejects.toThrow(
-        'No position found'
-      )
+    it('should return null when selling token not owned (no cost basis)', async () => {
+      const result = await performanceTracker.recordSell('NONEXISTENT', 50, 40)
+      expect(result).toBeNull()
     })
 
     it('should accumulate realized P&L across multiple sells', async () => {
@@ -169,7 +174,10 @@ describe('PerformanceTracker', () => {
       // Sell 2: 30 AERO at $0.70 = $21
       // Cost: 30 * $0.65 = $19.50
       // P&L: $21 - $19.50 = $1.50
-      const { position } = await performanceTracker.recordSell('AERO', 30, 21)
+      const result = await performanceTracker.recordSell('AERO', 30, 21)
+
+      expect(result).not.toBeNull()
+      const { position } = result!
 
       // Total realized P&L: $4.50 + $1.50 = $6.00
       expect(parseFloat(position.realizedPnlUsd)).toBeCloseTo(6, 2)
@@ -333,7 +341,10 @@ describe('PerformanceTracker', () => {
         65
       )
 
-      const { position } = await performanceTracker.recordSell('AERO', 100, 80)
+      const result = await performanceTracker.recordSell('AERO', 100, 80)
+
+      expect(result).not.toBeNull()
+      const { position } = result!
 
       expect(parseFloat(position.balance)).toBe(0)
       expect(parseFloat(position.totalCostUsd)).toBe(0)

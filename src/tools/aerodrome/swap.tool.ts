@@ -12,11 +12,16 @@
  * TRACKING: On successful execution:
  * - Logs trade to swap_transactions table
  * - Updates positions table with cost basis
+ *
+ * MULTI-HOP: Supports routing through an intermediate token:
+ * - Single-hop: executeSwap({ tokenIn: "USDC", tokenOut: "WETH", ... })
+ * - Multi-hop: executeSwap({ tokenIn: "USDC", tokenOut: "BRETT", via: "WETH", ... })
  */
 import { createTool } from '@mastra/core/tools'
 import { ethers } from 'ethers'
 import { z } from 'zod'
 
+import type { AerodromeRoute } from '../../config/contracts.js'
 import { AERODROME_CONTRACTS, AERODROME_ROUTER_ABI, createRoute } from '../../config/contracts.js'
 import { ENV_CONFIG, TRADING_CONFIG } from '../../config/index.js'
 import { TOKEN_ADDRESSES, resolveToken, shouldUseStablePool } from '../../config/tokens.js'
@@ -24,12 +29,12 @@ import { swapTransactionsRepo } from '../../database/repositories/index.js'
 import { approveToken, getProvider, getWallet, isWalletConfigured } from '../../execution/wallet.js'
 import { performanceTracker } from '../../services/performance-tracker.js'
 
-/** Quote tokens - used as base currency for trading */
-const QUOTE_TOKENS = ['USDC', 'USDbC', 'DAI', 'WETH']
+/** Stablecoin tokens - don't track positions for these (they're ~$1, no P&L to track) */
+const STABLECOIN_TOKENS = ['USDC', 'USDbC', 'DAI']
 
-/** Check if a token is a quote token */
-function isQuoteToken(symbol: string): boolean {
-  return QUOTE_TOKENS.includes(symbol.toUpperCase())
+/** Check if a token is a stablecoin (excluded from position tracking) */
+function isStablecoin(symbol: string): boolean {
+  return STABLECOIN_TOKENS.includes(symbol.toUpperCase())
 }
 
 /** DexScreener response type */
@@ -70,7 +75,13 @@ export const executeSwapTool = createTool({
   description: `Execute a token swap on Aerodrome DEX.
 Only call this when you have decided to trade AND you are confident.
 Requires wallet to be configured with AGENT_PRIVATE_KEY.
-NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead of executing.`,
+NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead of executing.
+
+Supports multi-hop routing with the optional 'via' parameter:
+- Direct: executeSwap({ tokenIn: "USDC", tokenOut: "WETH", amountIn: "10", minAmountOut: "0.003" })
+- Multi-hop: executeSwap({ tokenIn: "USDC", tokenOut: "BRETT", via: "WETH", amountIn: "10", minAmountOut: "1000" })
+
+Use 'via' when no direct pool exists (e.g., USDC→BRETT requires routing through WETH).`,
 
   inputSchema: z.object({
     tokenIn: z.string().describe('Input token symbol or address'),
@@ -78,6 +89,10 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
     amountIn: z.string().describe('Amount to swap in human-readable format'),
     minAmountOut: z.string().describe('Minimum acceptable output amount'),
     slippagePercent: z.number().default(0.5).describe('Slippage tolerance percentage'),
+    via: z
+      .string()
+      .optional()
+      .describe("Optional intermediate token for multi-hop routing (e.g., 'WETH')"),
   }),
 
   outputSchema: z.object({
@@ -98,13 +113,12 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
   }),
 
   execute: async ({ context }) => {
-    const { tokenIn, tokenOut, amountIn, minAmountOut } = context
+    const { tokenIn, tokenOut, amountIn, minAmountOut, via } = context
 
     // SAFETY: Block execution in dry run / test mode to prevent accidental trades
     if (ENV_CONFIG.dryRun || ENV_CONFIG.isTest) {
-      console.log(
-        `🚫 [DRY RUN] Would swap ${amountIn} ${tokenIn} → ${tokenOut} (min: ${minAmountOut})`
-      )
+      const routeStr = via ? `${tokenIn} → ${via} → ${tokenOut}` : `${tokenIn} → ${tokenOut}`
+      console.log(`🚫 [DRY RUN] Would swap ${amountIn} ${routeStr} (min: ${minAmountOut})`)
       return {
         success: false,
         dryRun: true,
@@ -128,6 +142,7 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
     try {
       const tokenInMeta = resolveToken(tokenIn)
       const tokenOutMeta = resolveToken(tokenOut)
+      const viaMeta = via ? resolveToken(via) : null
 
       if (!tokenInMeta || !tokenOutMeta) {
         return {
@@ -138,13 +153,41 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
         }
       }
 
+      if (via && !viaMeta) {
+        return {
+          success: false,
+          tokenIn: { symbol: tokenIn, amount: amountIn },
+          tokenOut: { symbol: tokenOut, amountExpected: '0', amountMin: minAmountOut },
+          error: `Unknown intermediate token: ${via}`,
+        }
+      }
+
       const wallet = getWallet()
-      const isStable = shouldUseStablePool(tokenIn, tokenOut)
       const amountInRaw = ethers.parseUnits(amountIn, tokenInMeta.decimals)
       const minAmountOutRaw = ethers.parseUnits(minAmountOut, tokenOutMeta.decimals)
-
-      const route = createRoute(tokenInMeta.address, tokenOutMeta.address, isStable)
       const deadline = Math.floor(Date.now() / 1000) + TRADING_CONFIG.txDeadlineSeconds
+
+      // Build routes array (single-hop or multi-hop)
+      let routes: AerodromeRoute[]
+      let isStable: boolean
+
+      if (viaMeta) {
+        // Multi-hop: tokenIn → via → tokenOut
+        const isStable1 = shouldUseStablePool(tokenInMeta.symbol, viaMeta.symbol)
+        const isStable2 = shouldUseStablePool(viaMeta.symbol, tokenOutMeta.symbol)
+        routes = [
+          createRoute(tokenInMeta.address, viaMeta.address, isStable1),
+          createRoute(viaMeta.address, tokenOutMeta.address, isStable2),
+        ]
+        isStable = isStable1 && isStable2 // For logging purposes
+        console.log(
+          `🔀 Multi-hop route: ${tokenInMeta.symbol} → ${viaMeta.symbol} → ${tokenOutMeta.symbol}`
+        )
+      } else {
+        // Single-hop: tokenIn → tokenOut (existing behavior)
+        isStable = shouldUseStablePool(tokenIn, tokenOut)
+        routes = [createRoute(tokenInMeta.address, tokenOutMeta.address, isStable)]
+      }
 
       const router = new ethers.Contract(
         AERODROME_CONTRACTS.ROUTER_V2,
@@ -158,9 +201,9 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
       const isFromETH = tokenInMeta.address.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()
 
       if (isFromETH) {
-        // Swap ETH for tokens
+        // Swap ETH for tokens (works with multi-hop routes)
         const swapEthFn = router.getFunction('swapExactETHForTokens')
-        tx = (await swapEthFn(minAmountOutRaw, [route], wallet.address, deadline, {
+        tx = (await swapEthFn(minAmountOutRaw, routes, wallet.address, deadline, {
           value: amountInRaw,
         })) as ethers.ContractTransactionResponse
       } else {
@@ -175,7 +218,7 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
           tx = (await swapToEthFn(
             amountInRaw,
             minAmountOutRaw,
-            [route],
+            routes,
             wallet.address,
             deadline
           )) as ethers.ContractTransactionResponse
@@ -184,7 +227,7 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
           tx = (await swapTokensFn(
             amountInRaw,
             minAmountOutRaw,
-            [route],
+            routes,
             wallet.address,
             deadline
           )) as ethers.ContractTransactionResponse
@@ -220,6 +263,7 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
           const gasCostUsd = gasCostEth * ethPriceUsd
 
           // Log to swap_transactions table
+          // For multi-hop, we log the overall swap (tokenIn → tokenOut)
           await swapTransactionsRepo.logSwap({
             txHash: receipt.hash,
             blockNumber: receipt.blockNumber,
@@ -232,7 +276,7 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
             tokenOutAddress: tokenOutMeta.address,
             amountOut: minAmountOut,
             amountOutUsd: amountOutUsd.toFixed(2),
-            poolAddress: route.from, // Pool address from route
+            poolAddress: routes[0].from, // First hop's input token address
             isStablePool: isStable,
             gasUsed: Number(gasUsedBn),
             gasPriceGwei: gasPriceGwei.toFixed(4),
@@ -242,11 +286,11 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
 
           // Update positions for P&L tracking
           // Determine if this is a BUY or SELL based on quote tokens
-          const tokenInIsQuote = isQuoteToken(tokenInMeta.symbol)
-          const tokenOutIsQuote = isQuoteToken(tokenOutMeta.symbol)
+          const tokenInIsStable = isStablecoin(tokenInMeta.symbol)
+          const tokenOutIsStable = isStablecoin(tokenOutMeta.symbol)
 
-          if (tokenInIsQuote && !tokenOutIsQuote) {
-            // BUY: Spending quote token (USDC/WETH) to get target token
+          if (tokenInIsStable && !tokenOutIsStable) {
+            // BUY: Spending stablecoin to get volatile token (WETH, AERO, etc.)
             await performanceTracker.recordBuy(
               tokenOutMeta.symbol,
               tokenOutMeta.address,
@@ -256,23 +300,36 @@ NOTE: Trades are blocked in DRY_RUN mode - the tool will return an error instead
             console.log(
               `📊 Recorded BUY: ${amountOutNum} ${tokenOutMeta.symbol} for $${amountInUsd.toFixed(2)}`
             )
-          } else if (!tokenInIsQuote && tokenOutIsQuote) {
-            // SELL: Selling target token to get quote token
-            await performanceTracker.recordSell(
+          } else if (!tokenInIsStable && tokenOutIsStable) {
+            // SELL: Selling volatile token to get stablecoin
+            const sellResult = await performanceTracker.recordSell(
               tokenInMeta.symbol,
               amountInNum,
               amountOutUsd // Proceeds in USD
             )
-            console.log(
-              `📊 Recorded SELL: ${amountInNum} ${tokenInMeta.symbol} for $${amountOutUsd.toFixed(2)}`
-            )
-          } else {
-            // Token-to-token swap (e.g., AERO → BRETT)
-            // Record as SELL of tokenIn and BUY of tokenOut
-            if (!tokenInIsQuote) {
-              await performanceTracker.recordSell(tokenInMeta.symbol, amountInNum, amountInUsd)
+            if (sellResult) {
+              console.log(
+                `📊 Recorded SELL: ${amountInNum} ${tokenInMeta.symbol} for $${amountOutUsd.toFixed(2)} (P&L: $${sellResult.realizedPnl.toFixed(2)})`
+              )
+            } else {
+              console.log(
+                `📊 Sale logged: ${amountInNum} ${tokenInMeta.symbol} for $${amountOutUsd.toFixed(2)} (P&L not tracked - no cost basis)`
+              )
             }
-            if (!tokenOutIsQuote) {
+          } else {
+            // Volatile-to-volatile swap (e.g., WETH → AERO, AERO → BRETT)
+            // Record as SELL of tokenIn and BUY of tokenOut
+            if (!tokenInIsStable) {
+              const sellResult = await performanceTracker.recordSell(
+                tokenInMeta.symbol,
+                amountInNum,
+                amountInUsd
+              )
+              if (!sellResult) {
+                console.log(`📊 ${tokenInMeta.symbol} sale not tracked (no cost basis)`)
+              }
+            }
+            if (!tokenOutIsStable) {
               await performanceTracker.recordBuy(
                 tokenOutMeta.symbol,
                 tokenOutMeta.address,

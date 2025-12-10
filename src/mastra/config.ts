@@ -18,4 +18,10 @@ export const mastra = new Mastra({
     aerodromeTrader: aerodromeAgent,
   },
   logger: new ConsoleLogger({ name: 'AerodromeAgent', level: 'info' }),
+  server: {
+    // Higher maxSteps for Studio UI (default is 5, which cuts off swap executions)
+    defaultGenerateOptions: {
+      maxSteps: 20,
+    },
+  },
 })

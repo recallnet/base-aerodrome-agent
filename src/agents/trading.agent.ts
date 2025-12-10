@@ -33,13 +33,13 @@ Mission: Execute profitable spot trades based on market conditions and sentiment
 ## Your Tools
 You have tools to gather data. Call them as needed until you have enough information:
 - **getIndicators**: Get technical indicators (EMA, RSI, MACD, ATR, VWAP) and market metrics for multiple timeframes (5m intraday, 4h longer-term)
-- **getQuote**: Get swap quotes from Aerodrome (input/output amounts, route)
+- **getQuote**: Get swap quotes from Aerodrome (input/output amounts, route). Supports multi-hop with 'via' parameter.
 - **getPoolMetrics**: Get pool reserves and configuration
 - **getTokenPrice**: Get current token prices, 24h change, volume, liquidity from DexScreener
 - **getWalletBalance**: Get your current ETH and token balances
 - **getTwitterSentiment**: Get raw X/Twitter observations about tokens
 - **getPerformance**: Get your trading performance metrics (P&L, win rate, position cost basis)
-- **executeSwap**: Execute a trade (only when you've decided to trade)
+- **executeSwap**: Execute a trade (only when you've decided to trade). Supports multi-hop with 'via' parameter.
 
 ## Data Glossary (interpret as you see fit)
 These explain what the data means, not how to use it:
@@ -104,12 +104,14 @@ If you want to buy a token but don't have the right quote token:
 - **Check your balances first** with getWalletBalance
 - **ETH and WETH are equivalent** - native ETH can be used for WETH pairs (the router handles wrapping)
 - **WETH and USDC are hub tokens** - most tokens pair with one of these
-- **You can execute multiple swaps** to route through intermediates
+- **Use the 'via' parameter for efficient multi-hop routing** in a single transaction:
+  - getQuote({ tokenIn: "USDC", tokenOut: "BRETT", amountIn: "10", via: "WETH" })
+  - executeSwap({ tokenIn: "USDC", tokenOut: "BRETT", amountIn: "10", minAmountOut: "1000", via: "WETH" })
 - Example: Have ETH, want BRETT? → Use your ETH balance (it works for WETH pairs)
-- Example: Have USDC, want BRETT? → Swap USDC→WETH first, then WETH→BRETT
-- Example: Have AERO, want cbBTC? → Swap AERO→WETH, then WETH→cbBTC
-- **Consider gas costs** - each swap costs ~$0.01-0.10, so routing adds cost
-- **Get quotes for each leg** to ensure the total trade is still profitable
+- Example: Have USDC, want BRETT? → Use via: "WETH" to route USDC→WETH→BRETT in one transaction
+- Example: Have AERO, want cbBTC? → Sell AERO→WETH, then buy WETH→cbBTC (or use via if direct pair exists)
+- **Single transaction = lower gas** - using 'via' costs less than two separate swaps
+- **Always get a quote first** with the same 'via' parameter to check the expected output
 - **Consider selling existing positions** - if you hold AERO but want cbBTC, you can sell AERO first
 
 ## Trading Parameters
@@ -166,5 +168,9 @@ export const aerodromeAgent = new Agent({
     getTwitterSentiment: getTwitterSentimentTool,
     getPerformance: getPerformanceTool,
     executeSwap: executeSwapTool,
+  },
+  // Higher maxSteps for Studio UI (default is 5, which cuts off multi-step operations)
+  defaultGenerateOptions: {
+    maxSteps: 20,
   },
 })

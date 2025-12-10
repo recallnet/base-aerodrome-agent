@@ -127,16 +127,23 @@ export class PerformanceTracker {
 
   /**
    * Record a sell trade - realizes P&L based on average cost
+   *
+   * Returns null if no position exists (token was acquired outside the tracking system).
+   * In this case, the sale is still logged to swap_transactions, but P&L cannot be calculated.
    */
   async recordSell(
     token: string,
     amount: number,
     proceedsUsd: number
-  ): Promise<{ position: Position; realizedPnl: number }> {
+  ): Promise<{ position: Position; realizedPnl: number } | null> {
     const position = await this.getPosition(token)
 
+    // Skip P&L tracking for tokens acquired outside the tracking system
     if (!position) {
-      throw new Error(`No position found for token: ${token}`)
+      console.log(
+        `⚠️ Skipping P&L tracking for ${token} - no cost basis data (token acquired outside system)`
+      )
+      return null
     }
 
     const currentBalance = parseFloat(position.balance)
