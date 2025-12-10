@@ -13,7 +13,7 @@ import { aerodromeAgent } from '../trading.agent'
 
 describe('Trading Agent - Safety Checks', () => {
   it('blocks swap execution via DRY_RUN by default', async () => {
-    // DRY_RUN defaults to true unless explicitly set to 'false'
+    // DRY_RUN is set to true in .env.example and test setup
     // This provides safety in test environments
 
     // Try to execute a swap directly - should be blocked by DRY_RUN

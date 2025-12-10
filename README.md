@@ -73,7 +73,7 @@ See [EigenAI Configuration](#eigenai-verifiable-ai) below for details.
 
 ## ⚠️ Safety: DRY_RUN Mode
 
-**By default, the agent CAN execute real trades.** Use these safety controls:
+**By default, `DRY_RUN=true` in `.env.example` blocks all trades.** Set `DRY_RUN=false` to enable real trading.
 
 | Command | Trades? | Use Case |
 |---------|---------|----------|
