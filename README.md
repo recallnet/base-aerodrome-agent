@@ -84,13 +84,13 @@ This project follows the **correct agentic pattern** where the LLM does the work
 | Tool                  | Purpose                       | Returns                     |
 | --------------------- | ----------------------------- | --------------------------- |
 | `getIndicators`       | Technical analysis            | EMA, RSI, MACD, ATR, VWAP + market metrics |
-| `getQuote`            | Swap quotes from Aerodrome    | Input/output amounts, route |
+| `getQuote`            | Swap quotes from Aerodrome    | Input/output amounts, route. Supports multi-hop via `via` param |
 | `getPoolMetrics`      | Pool reserves and config      | Raw reserves, stable flag   |
 | `getTokenPrice`       | Token prices from DexScreener | Price, 24h change, volume   |
 | `getWalletBalance`    | Current wallet balances       | ETH and token amounts       |
 | `getTwitterSentiment` | X/Twitter observations        | Themes, sentiment velocity  |
 | `getPerformance`      | Portfolio P&L tracking        | Realized/unrealized P&L, positions |
-| `executeSwap`         | Execute trades                | Transaction hash, status    |
+| `executeSwap`         | Execute trades                | Transaction hash, status. Supports multi-hop via `via` param |
 
 ### Database (Persistence)
 
@@ -112,6 +112,37 @@ The agent tracks its own trading performance with cost-basis accounting:
 - **Portfolio Snapshots**: Periodic snapshots of total portfolio value over time
 
 The agent can query its performance via the `getPerformance` tool to inform trading decisions.
+
+### Multi-Hop Routing
+
+The agent can route trades through intermediate tokens in a single atomic transaction:
+
+```
+USDC → WETH → BRETT  (instead of two separate swaps)
+```
+
+**How to use:**
+```typescript
+// Get quote with intermediate token
+getQuote({ tokenIn: "USDC", tokenOut: "BRETT", amountIn: "10", via: "WETH" })
+
+// Execute multi-hop swap
+executeSwap({ tokenIn: "USDC", tokenOut: "BRETT", amountIn: "10", minAmountOut: "1000", via: "WETH" })
+```
+
+**Benefits:**
+- **Lower gas** - Single transaction instead of two
+- **Atomic execution** - Either the whole route succeeds or fails
+- **Better routing** - Access tokens that don't have direct USDC pools
+
+### Position Tracking
+
+The agent tracks positions for all **volatile assets** (WETH, AERO, BRETT, etc.) but not for **stablecoins** (USDC, DAI) since they don't have meaningful P&L:
+
+| Asset Type | Examples | Position Tracked? |
+|------------|----------|-------------------|
+| Volatile   | WETH, AERO, BRETT | ✅ Yes - cost basis and P&L |
+| Stablecoin | USDC, USDbC, DAI | ❌ No - always ~$1 |
 
 ## 📁 Project Structure
 
