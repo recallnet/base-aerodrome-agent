@@ -1,11 +1,14 @@
 /**
  * CoinGecko OHLCV Client
  * Fetches candlestick data from CoinGecko's Onchain DEX API
+ * Supports both Pro (paid) and Demo (free) API tiers
  *
- * API Endpoint: GET https://pro-api.coingecko.com/api/v3/onchain/networks/{network}/tokens/{token_address}/ohlcv/{timeframe}
+ * API Endpoint: GET {baseUrl}/onchain/networks/{network}/tokens/{token_address}/ohlcv/{timeframe}
  *
  * @see https://docs.coingecko.com/reference/token-ohlcv-token-address
  */
+
+import { getCoinGeckoConfig } from '../../config/index.js'
 
 /**
  * Timeframe options for OHLCV data
@@ -97,13 +100,6 @@ export interface OHLCVResult {
 }
 
 /**
- * Get the CoinGecko API key from environment
- */
-function getApiKey(): string | null {
-  return process.env.COINGECKO_API_KEY || null
-}
-
-/**
  * Validate aggregate value for the given timeframe
  */
 function validateAggregate(timeframe: OHLCVTimeframe, aggregate: string): boolean {
@@ -122,14 +118,14 @@ function validateAggregate(timeframe: OHLCVTimeframe, aggregate: string): boolea
  * @returns OHLCV result with candles array
  */
 export async function fetchOHLCV(options: FetchOHLCVOptions): Promise<OHLCVResult> {
-  const apiKey = getApiKey()
-  if (!apiKey) {
+  const config = getCoinGeckoConfig()
+  if (!config) {
     return {
       success: false,
       candles: [],
       baseToken: null,
       quoteToken: null,
-      error: 'COINGECKO_API_KEY environment variable not set',
+      error: 'CoinGecko API key not set. Set COINGECKO_PRO_API_KEY or COINGECKO_DEMO_API_KEY',
     }
   }
 
@@ -157,8 +153,8 @@ export async function fetchOHLCV(options: FetchOHLCVOptions): Promise<OHLCVResul
     }
   }
 
-  // Build URL
-  const baseUrl = 'https://pro-api.coingecko.com/api/v3/onchain/networks'
+  // Build URL using configured base URL
+  const baseUrl = `${config.baseUrl}/onchain/networks`
   const url = new URL(`${baseUrl}/${network}/tokens/${tokenAddress}/ohlcv/${timeframe}`)
 
   // Add query parameters
@@ -174,7 +170,7 @@ export async function fetchOHLCV(options: FetchOHLCVOptions): Promise<OHLCVResul
     const response = await fetch(url.toString(), {
       method: 'GET',
       headers: {
-        'x-cg-pro-api-key': apiKey,
+        [config.headerName]: config.apiKey,
         Accept: 'application/json',
       },
     })

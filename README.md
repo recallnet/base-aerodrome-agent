@@ -226,7 +226,9 @@ AGENT_PRIVATE_KEY=0x...
 BASE_RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_KEY
 
 # Data sources (optional but recommended)
-COINGECKO_API_KEY=...   # For technical indicators
+# CoinGecko: use ONE of these (Pro takes precedence if both set)
+COINGECKO_PRO_API_KEY=...   # Pro tier (pro-api.coingecko.com)
+COINGECKO_DEMO_API_KEY=...  # Demo tier (api.coingecko.com)
 GROK_API_KEY=...        # For X/Twitter sentiment
 
 # Observability (optional)

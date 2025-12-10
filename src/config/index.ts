@@ -20,9 +20,41 @@ export const ENV_CONFIG = {
 } as const
 
 /**
- * CoinGecko API key for technical indicators
+ * CoinGecko API configuration
+ * Supports both Pro (paid) and Demo (free) API tiers
+ * Pro API key takes precedence if both are set
+ *
+ * @returns Config object if an API key is set, null otherwise
  */
-export const COINGECKO_API_KEY = process.env.COINGECKO_API_KEY || ''
+export function getCoinGeckoConfig(): {
+  apiKey: string
+  baseUrl: string
+  headerName: string
+  tier: 'pro' | 'demo'
+} | null {
+  const proKey = process.env.COINGECKO_PRO_API_KEY
+  const demoKey = process.env.COINGECKO_DEMO_API_KEY
+
+  if (proKey) {
+    return {
+      apiKey: proKey,
+      baseUrl: 'https://pro-api.coingecko.com/api/v3',
+      headerName: 'x-cg-pro-api-key',
+      tier: 'pro',
+    }
+  }
+
+  if (demoKey) {
+    return {
+      apiKey: demoKey,
+      baseUrl: 'https://api.coingecko.com/api/v3',
+      headerName: 'x-cg-demo-api-key',
+      tier: 'demo',
+    }
+  }
+
+  return null
+}
 
 /**
  * Risk management configuration

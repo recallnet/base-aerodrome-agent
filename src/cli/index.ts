@@ -17,6 +17,7 @@ import { runSingleIteration } from '../loop/index.js'
 import { verifyWalletOwnership } from '../services/recall-verifier.js'
 import { validateRecallVerificationConfig, EIGENAI_CONFIG } from '../config/eigenai.js'
 import { isWalletConfigured, getWalletAddress } from '../execution/wallet.js'
+import { getCoinGeckoConfig } from '../config/index.js'
 
 /** Options for the analyze command */
 interface AnalyzeOptions {
@@ -67,7 +68,12 @@ program
 
       console.log('\n=== Data Sources (optional) ===')
       console.log(
-        `📈 CoinGecko:      ${process.env.COINGECKO_API_KEY ? '✅ Configured' : '⚠️  Not set (no indicators)'}`
+        `📈 CoinGecko:      ${(() => {
+          const cg = getCoinGeckoConfig()
+          if (cg?.tier === 'pro') return '✅ Pro API'
+          if (cg?.tier === 'demo') return '✅ Demo API'
+          return '⚠️  Not set (no indicators)'
+        })()}`
       )
       console.log(
         `🐦 Grok API:       ${process.env.GROK_API_KEY ? '✅ Configured' : '⚠️  Not set (no sentiment)'}`
