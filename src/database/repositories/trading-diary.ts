@@ -11,6 +11,7 @@ import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm'
 
 import { db } from '../db.js'
 import {
+  eigenaiSignatures,
   portfolioSnapshots,
   priceHistory,
   swapTransactions,
@@ -18,6 +19,8 @@ import {
 } from '../schema/trading/defs.js'
 import type {
   DiaryEntryForContext,
+  EigenAISignature,
+  NewEigenAISignature,
   NewPortfolioSnapshot,
   NewPriceHistoryEntry,
   NewSwapTransaction,
@@ -327,8 +330,132 @@ export class PriceHistoryRepository {
   }
 }
 
+/**
+ * EigenAI Signatures Repository
+ * Records cryptographic signatures from EigenAI for verifiable inference
+ */
+export class EigenAISignaturesRepository {
+  /**
+   * Store a new signature record
+   */
+  async createSignature(signature: NewEigenAISignature): Promise<EigenAISignature> {
+    const [created] = await db.insert(eigenaiSignatures).values(signature).returning()
+    return created
+  }
+
+  /**
+   * Get signature by iteration number
+   */
+  async getByIteration(iterationNumber: number): Promise<EigenAISignature | null> {
+    const [result] = await db
+      .select()
+      .from(eigenaiSignatures)
+      .where(eq(eigenaiSignatures.iterationNumber, iterationNumber))
+      .limit(1)
+    return result || null
+  }
+
+  /**
+   * Get signatures pending Recall submission
+   */
+  async getPendingRecallSubmission(limit: number = 10): Promise<EigenAISignature[]> {
+    return db
+      .select()
+      .from(eigenaiSignatures)
+      .where(
+        and(
+          eq(eigenaiSignatures.submittedToRecall, false),
+          eq(eigenaiSignatures.localVerificationStatus, 'verified')
+        )
+      )
+      .orderBy(eigenaiSignatures.timestamp)
+      .limit(limit)
+  }
+
+  /**
+   * Mark signature as submitted to Recall
+   */
+  async markSubmittedToRecall(
+    id: string,
+    recallSubmissionId: string
+  ): Promise<EigenAISignature> {
+    const [updated] = await db
+      .update(eigenaiSignatures)
+      .set({
+        submittedToRecall: true,
+        recallSubmissionId,
+        recallSubmittedAt: new Date(),
+        recallVerificationStatus: 'pending',
+        updatedAt: new Date(),
+      })
+      .where(eq(eigenaiSignatures.id, id))
+      .returning()
+    return updated
+  }
+
+  /**
+   * Update Recall verification status
+   */
+  async updateRecallStatus(
+    id: string,
+    status: 'verified' | 'rejected' | 'error',
+    error?: string
+  ): Promise<EigenAISignature> {
+    const [updated] = await db
+      .update(eigenaiSignatures)
+      .set({
+        recallVerificationStatus: status,
+        recallError: error,
+        updatedAt: new Date(),
+      })
+      .where(eq(eigenaiSignatures.id, id))
+      .returning()
+    return updated
+  }
+
+  /**
+   * Get recent signatures for monitoring
+   */
+  async getRecent(limit: number = 20): Promise<EigenAISignature[]> {
+    return db
+      .select()
+      .from(eigenaiSignatures)
+      .orderBy(desc(eigenaiSignatures.timestamp))
+      .limit(limit)
+  }
+
+  /**
+   * Get signature statistics
+   */
+  async getStats(): Promise<{
+    total: number
+    verified: number
+    invalid: number
+    submittedToRecall: number
+  }> {
+    const result = await db
+      .select({
+        total: sql<number>`count(*)`,
+        verified: sql<number>`count(case when local_verification_status = 'verified' then 1 end)`,
+        invalid: sql<number>`count(case when local_verification_status = 'invalid' then 1 end)`,
+        submittedToRecall: sql<number>`count(case when submitted_to_recall = true then 1 end)`,
+      })
+      .from(eigenaiSignatures)
+
+    return (
+      result[0] || {
+        total: 0,
+        verified: 0,
+        invalid: 0,
+        submittedToRecall: 0,
+      }
+    )
+  }
+}
+
 // Singleton instances
 export const tradingDiaryRepo = new TradingDiaryRepository()
 export const swapTransactionsRepo = new SwapTransactionsRepository()
 export const portfolioSnapshotsRepo = new PortfolioSnapshotsRepository()
 export const priceHistoryRepo = new PriceHistoryRepository()
+export const eigenaiSignaturesRepo = new EigenAISignaturesRepository()

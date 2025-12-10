@@ -6,6 +6,7 @@
  * - tradingDiary: Every decision the agent makes (like diary.jsonl)
  * - swapTransactions: Executed swaps with on-chain data
  * - portfolioSnapshots: Periodic balance snapshots for performance tracking
+ * - eigenaiSignatures: Cryptographic signatures from EigenAI for verifiable inference
  */
 import {
   boolean,
@@ -236,5 +237,57 @@ export const priceHistory = pgTable(
   (table) => [
     index('idx_prices_token_timestamp').on(table.token, table.timestamp),
     index('idx_prices_timestamp').on(table.timestamp),
+  ]
+)
+
+/**
+ * EigenAI Signatures
+ * Records cryptographic signatures from EigenAI dTERMinal API responses.
+ * Used for verifiable AI inference and Recall API submission.
+ */
+export const eigenaiSignatures = pgTable(
+  'eigenai_signatures',
+  {
+    id: uuidColumn(),
+
+    // Link to trading iteration
+    iterationNumber: integer('iteration_number').notNull(),
+    diaryId: uuid('diary_id').references(() => tradingDiary.id),
+    timestamp: timestamp('timestamp', { withTimezone: true }).notNull().defaultNow(),
+
+    // Signature data from EigenAI response
+    signature: text('signature').notNull(), // ECDSA signature (hex)
+    modelId: text('model_id').notNull(), // e.g., "gpt-oss-120b-f16"
+
+    // Audit hashes (for verification without storing full request/response)
+    requestHash: text('request_hash').notNull(), // keccak256 of prompt
+    responseHash: text('response_hash').notNull(), // keccak256 of output
+
+    // Local verification results
+    localVerificationStatus: text('local_verification_status', {
+      enum: ['pending', 'verified', 'invalid', 'error'],
+    })
+      .notNull()
+      .default('pending'),
+    recoveredSigner: text('recovered_signer'), // Address recovered from signature
+    expectedSigner: text('expected_signer'), // Expected signer address
+    verificationError: text('verification_error'), // Error message if verification failed
+
+    // Recall API submission tracking
+    submittedToRecall: boolean('submitted_to_recall').notNull().default(false),
+    recallSubmissionId: text('recall_submission_id'), // ID returned by Recall API
+    recallSubmittedAt: timestamp('recall_submitted_at', { withTimezone: true }),
+    recallVerificationStatus: text('recall_verification_status', {
+      enum: ['pending', 'verified', 'rejected', 'error'],
+    }),
+    recallError: text('recall_error'),
+
+    ...timestampColumns(),
+  },
+  (table) => [
+    index('idx_eigenai_iteration').on(table.iterationNumber),
+    index('idx_eigenai_timestamp').on(table.timestamp),
+    index('idx_eigenai_local_status').on(table.localVerificationStatus),
+    index('idx_eigenai_recall_status').on(table.submittedToRecall),
   ]
 )

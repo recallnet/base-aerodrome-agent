@@ -4,6 +4,7 @@
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm'
 
 import type {
+  eigenaiSignatures,
   portfolioSnapshots,
   positions,
   priceHistory,
@@ -30,6 +31,10 @@ export type NewPriceHistoryEntry = InferInsertModel<typeof priceHistory>
 // Positions
 export type Position = InferSelectModel<typeof positions>
 export type NewPosition = InferInsertModel<typeof positions>
+
+// EigenAI Signatures
+export type EigenAISignature = InferSelectModel<typeof eigenaiSignatures>
+export type NewEigenAISignature = InferInsertModel<typeof eigenaiSignatures>
 
 /**
  * Context snapshot stored with each diary entry
