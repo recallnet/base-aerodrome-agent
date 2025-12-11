@@ -37,11 +37,12 @@ export const EIGENAI_CONFIG = {
    * Model ID to use for inference
    *
    * Available models:
-   * - `gpt-oss-120b-f16` - 120B parameter model (default)
+   * - `qwen3-32b-128k-bf16` - Qwen3 32B parameter model (default, supports text responses)
+   * - `gpt-oss-120b-f16` - 120B parameter model (tool-calling only, no text output)
    *
-   * @default 'gpt-oss-120b-f16'
+   * @default 'qwen3-32b-128k-bf16'
    */
-  modelId: process.env.EIGENAI_MODEL_ID || 'gpt-oss-120b-f16',
+   modelId: process.env.EIGENAI_MODEL_ID || 'qwen3-32b-128k-bf16',
 
   /**
    * Private key for grant wallet (used for authentication)

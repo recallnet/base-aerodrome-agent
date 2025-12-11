@@ -38,7 +38,7 @@ describe('Trading Agent - Safety Checks', () => {
 
 describe('Trading Agent - Inference Provider', () => {
   it('responds to a simple query without tool calls', async () => {
-    const response = await aerodromeAgent.generateLegacy(
+    const response = await aerodromeAgent.generate(
       'What tokens can you help me trade on Aerodrome? Just list the token names, no need to check prices.',
       { maxSteps: 1 }
     )
@@ -61,13 +61,13 @@ describe('Trading Agent - Inference Provider', () => {
   it('uses tools to gather data when asked about prices', async () => {
     const toolsCalled: string[] = []
 
-    const response = await aerodromeAgent.generateLegacy(
+    const response = await aerodromeAgent.generate(
       'What is the current price of AERO? Use your tools to check.',
       {
         maxSteps: 3,
         onStepFinish: ({ toolCalls }) => {
           if (toolCalls?.length) {
-            toolsCalled.push(...toolCalls.map((t) => t.toolName))
+            toolsCalled.push(...toolCalls.map((t) => t.payload.toolName))
           }
         },
       }
@@ -89,13 +89,13 @@ describe('Trading Agent - Inference Provider', () => {
   it('checks wallet balance when asked about portfolio', async () => {
     const toolsCalled: string[] = []
 
-    const response = await aerodromeAgent.generateLegacy(
+    const response = await aerodromeAgent.generate(
       'What is my current wallet balance? Check my ETH and token balances.',
       {
         maxSteps: 3,
         onStepFinish: ({ toolCalls }) => {
           if (toolCalls?.length) {
-            toolsCalled.push(...toolCalls.map((t) => t.toolName))
+            toolsCalled.push(...toolCalls.map((t) => t.payload.toolName))
           }
         },
       }
@@ -113,13 +113,13 @@ describe('Trading Agent - Inference Provider', () => {
   it('gathers multiple data sources for trading analysis', async () => {
     const toolsCalled: string[] = []
 
-    const response = await aerodromeAgent.generateLegacy(
+    const response = await aerodromeAgent.generate(
       'Analyze AERO/USDC for a potential trade. Check the price, pool metrics, and give me your analysis. Do NOT execute any trades.',
       {
         maxSteps: 5,
         onStepFinish: ({ toolCalls }) => {
           if (toolCalls?.length) {
-            toolsCalled.push(...toolCalls.map((t) => t.toolName))
+            toolsCalled.push(...toolCalls.map((t) => t.payload.toolName))
           }
         },
       }
@@ -141,7 +141,7 @@ describe('Trading Agent - Inference Provider', () => {
   }, 90000)
 
   it('returns structured JSON decision when asked', async () => {
-    const response = await aerodromeAgent.generateLegacy(
+    const response = await aerodromeAgent.generate(
       `Based on the following hypothetical data, provide your trading decision as JSON:
       - AERO price: $1.50, up 5% in 24h
       - Pool liquidity: $10M

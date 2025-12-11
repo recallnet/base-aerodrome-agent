@@ -3,7 +3,7 @@
  *
  * Simple loop that:
  * 1. Gets recent trading history from diary (for context)
- * 2. Calls agent.generateLegacy() and lets the agent iterate
+ * 2. Calls agent.generate() and lets the agent iterate
  * 3. Logs every decision to the diary
  *
  * Pattern from aerodrome-mastra-implementation-guide.md:
@@ -171,11 +171,11 @@ Return your decision as JSON with this structure:
   let responseText = ''
 
   try {
-    const response = await aerodromeAgent.generateLegacy(prompt, {
+    const response = await aerodromeAgent.generate(prompt, {
       maxSteps: TRADING_CONFIG.maxAgentSteps,
       onStepFinish: ({ toolCalls }) => {
         if (toolCalls?.length) {
-          const toolNames = toolCalls.map((t) => t.toolName).join(', ')
+          const toolNames = toolCalls.map((t) => t.payload.toolName).join(', ')
           console.log(`  📞 Agent called: ${toolNames}`)
         }
       },

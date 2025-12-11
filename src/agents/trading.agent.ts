@@ -174,10 +174,12 @@ async function createAuthenticatedFetch(): Promise<typeof fetch> {
         // Parse the request body
         const body = JSON.parse(init.body as string)
 
-        // Add grant authentication fields
+        // Add grant authentication fields and ensure max_tokens is set
+        // EigenAI defaults to 128 tokens which truncates responses
         const authenticatedBody = {
           ...body,
           ...authFields,
+          max_tokens: body.max_tokens || 4096,
         }
 
         // Create new init with modified body
@@ -217,14 +219,16 @@ async function getModel() {
     const authenticatedFetch = await createAuthenticatedFetch()
 
     // Create OpenAI provider configured for dTERMinal API
+    // Use .chat() to get the chat completions endpoint (/chat/completions)
+    // instead of the default responses API (/responses) which dTERMinal doesn't support
     const eigenaiProvider = createOpenAI({
       baseURL: `${EIGENAI_CONFIG.apiUrl}/api`,
       fetch: authenticatedFetch,
       apiKey: 'not-required', // EigenAI uses grant auth, not API key
     })
 
-    // Return the model from the provider
-    return eigenaiProvider(EIGENAI_CONFIG.modelId)
+    // Return the chat model (uses /chat/completions endpoint)
+    return eigenaiProvider.chat(EIGENAI_CONFIG.modelId)
   }
 
   // Default: Anthropic Claude
