@@ -3,7 +3,9 @@
 #
 # Configuration: Copy config.env.example to config.env and set your values.
 # The postgres credentials are read from config.env via the env_file directive.
-name: aerodrome-agent
+#
+# NOTE: Project name is derived from directory name automatically.
+# This allows running multiple instances from different directories.
 
 networks:
   agent-network:
@@ -13,7 +15,6 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
-    container_name: aerodrome-postgres
     restart: unless-stopped
     networks:
       - agent-network
@@ -34,8 +35,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: aerodrome-agent
-    container_name: aerodrome-agent
     restart: unless-stopped
     networks:
       - agent-network
@@ -57,7 +56,7 @@ services:
       start_period: 60s
 
 # Persistent volume for PostgreSQL data
+# Volume name will be prefixed with project (directory) name automatically
 volumes:
   pgdata:
-    name: aerodrome-pgdata
 
