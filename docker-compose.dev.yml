@@ -1,0 +1,16 @@
+# Development Docker Compose override
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# This mounts source code for hot reloading during development.
+
+services:
+  agent:
+    image: aerodrome-agent:dev
+    volumes:
+      # Mount source for hot reloading
+      - ./src:/app/src:ro
+    environment:
+      NODE_ENV: development
+      DRY_RUN: "true"
+    # Use watch mode for development
+    command: ["pnpm", "dev"]

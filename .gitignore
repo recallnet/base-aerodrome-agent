@@ -160,3 +160,5 @@ local/
 dev-data/ 
 
 .agent/
+# Docker configuration (keep config.env.example tracked)
+config.env

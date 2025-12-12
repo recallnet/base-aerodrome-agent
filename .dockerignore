@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output (rebuilt in container)
+dist/
+
+# Environment files (use config.env instead)
+.env
+.env.*
+!.env.example
+config.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed at runtime)
+docs/
+*.md
+!README.md
+
+# Tests
+**/__tests__/
+*.test.ts
+vitest.config.ts
+
+# Development files
+.agent/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+

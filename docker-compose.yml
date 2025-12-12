@@ -1,0 +1,63 @@
+# Docker Compose for Aerodrome Trading Agent
+# Includes PostgreSQL database - no external DB needed
+#
+# Configuration: Copy config.env.example to config.env and set your values.
+# The postgres credentials are read from config.env via the env_file directive.
+name: aerodrome-agent
+
+networks:
+  agent-network:
+    driver: bridge
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: aerodrome-postgres
+    restart: unless-stopped
+    networks:
+      - agent-network
+    env_file:
+      - config.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Uses POSTGRES_USER and POSTGRES_DB from config.env (loaded via env_file)
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Trading Agent
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aerodrome-agent
+    container_name: aerodrome-agent
+    restart: unless-stopped
+    networks:
+      - agent-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - config.env
+    environment:
+      # Disable SSL for internal postgres connection
+      DATABASE_SSL: "false"
+    # DATABASE_URL is constructed at runtime by docker-entrypoint.sh
+    # using POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB from config.env
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+# Persistent volume for PostgreSQL data
+volumes:
+  pgdata:
+    name: aerodrome-pgdata
+

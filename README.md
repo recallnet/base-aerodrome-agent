@@ -346,6 +346,41 @@ Opens at **http://localhost:4111** with:
 
 > **Note**: `pnpm mastra:dev` runs the Studio UI only. For autonomous trading, use `pnpm dev` or `pnpm cli start`.
 
+## 🐳 Docker Deployment
+
+Run the agent with included PostgreSQL (no external database needed):
+
+```bash
+# Copy and configure environment
+cp config.env.example config.env
+# Edit config.env with your API keys
+
+# Start the stack
+docker-compose up -d
+
+# View logs
+docker-compose logs -f agent
+
+# Stop
+docker-compose down
+```
+
+The stack includes:
+- **PostgreSQL 16** - Persistent database with automatic migrations
+- **Trading Agent** - Autonomous loop with health checks
+
+Data persists in a Docker volume (`aerodrome-pgdata`). To reset:
+```bash
+docker-compose down -v  # Removes volumes
+```
+
+### Development with Docker
+
+```bash
+# Use dev override for source mounting
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
 ## 🔧 Development
 
 ```bash

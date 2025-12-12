@@ -5,10 +5,17 @@ import { Pool } from 'pg'
 
 import schema from './schema/index.js'
 
+// Determine SSL mode: explicit env var, or default based on environment
+// DATABASE_SSL=false for internal Docker connections
+// DATABASE_SSL=true for external/cloud databases
+const shouldUseSSL =
+  process.env.DATABASE_SSL === 'true' ||
+  (process.env.DATABASE_SSL !== 'false' && process.env.NODE_ENV === 'production')
+
 // Connection pool configuration for optimal performance
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: shouldUseSSL ? { rejectUnauthorized: false } : false,
   max: 10, // Maximum connections in pool
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
