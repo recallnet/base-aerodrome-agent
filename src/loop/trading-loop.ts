@@ -23,13 +23,28 @@ interface DexScreenerResponse {
     chainId: string
     priceUsd?: string
     liquidity?: { usd?: number }
+    baseToken?: { address?: string }
   }>
 }
 
+/** Known stablecoin addresses on Base (always ~$1.00) */
+const STABLECOIN_ADDRESSES = new Set([
+  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'.toLowerCase(), // USDC
+  '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA'.toLowerCase(), // USDbC
+  '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb'.toLowerCase(), // DAI
+])
+
 /**
  * Fetch current USD price for a token from DexScreener
+ * Note: For stablecoins, we hardcode $1.00 since DexScreener returns
+ * the price of the OTHER token in the pair, not the stablecoin itself.
  */
 async function fetchTokenPriceUsd(tokenAddress: string): Promise<number> {
+  // Stablecoins are always ~$1.00
+  if (STABLECOIN_ADDRESSES.has(tokenAddress.toLowerCase())) {
+    return 1.0
+  }
+
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`)
     if (!response.ok) return 0
@@ -40,6 +55,21 @@ async function fetchTokenPriceUsd(tokenAddress: string): Promise<number> {
       const basePairs = data.pairs.filter((p) => p.chainId === 'base')
       if (basePairs.length === 0) return 0
 
+      // Find pairs where our token is the BASE token (priceUsd refers to base token)
+      const tokenLower = tokenAddress.toLowerCase()
+      const pairsWhereBase = basePairs.filter(
+        (p) => p.baseToken?.address?.toLowerCase() === tokenLower
+      )
+
+      // If we found pairs where our token is base, use those
+      if (pairsWhereBase.length > 0) {
+        const bestPair = pairsWhereBase.sort(
+          (a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
+        )[0]
+        return parseFloat(bestPair.priceUsd || '0')
+      }
+
+      // Fallback: use any pair (may be wrong for quote tokens)
       const bestPair = basePairs.sort(
         (a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
       )[0]
@@ -64,6 +94,7 @@ async function takePortfolioSnapshot(iterationNumber: number): Promise<void> {
     let totalValueUsd = 0
     const balanceRecord: Record<string, string> = {}
 
+    console.log('📊 Portfolio breakdown:')
     for (const tb of tokenBalances) {
       const balanceNum = parseFloat(tb.balanceFormatted)
       if (balanceNum <= 0) continue
@@ -71,7 +102,12 @@ async function takePortfolioSnapshot(iterationNumber: number): Promise<void> {
       balanceRecord[tb.symbol] = tb.balanceFormatted
 
       const priceUsd = await fetchTokenPriceUsd(tb.address)
-      totalValueUsd += balanceNum * priceUsd
+      const valueUsd = balanceNum * priceUsd
+      totalValueUsd += valueUsd
+
+      console.log(
+        `   ${tb.symbol}: ${tb.balanceFormatted} × $${priceUsd.toFixed(4)} = $${valueUsd.toFixed(2)}`
+      )
     }
 
     await performanceTracker.createSnapshot(balanceRecord, totalValueUsd, iterationNumber)
