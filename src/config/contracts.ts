@@ -1,18 +1,31 @@
 /**
  * Aerodrome Contract Configuration for Base Chain
  * Contains contract addresses and ABIs for DEX interactions
+ *
+ * Aerodrome supports two pool types:
+ * - V2 (Classic AMM): Traditional x*y=k pools with 0.3% fee
+ * - Slipstream (CL): Concentrated liquidity (Uni V3-style) with 0.05% fee
  */
 
 /** Aerodrome contract addresses on Base mainnet */
 export const AERODROME_CONTRACTS = {
-  /** Router V2 - Main entry point for swaps */
+  // === V2 (Classic AMM) ===
+  /** Router V2 - Main entry point for classic AMM swaps */
   ROUTER_V2: '0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43',
+  /** Pool Factory for volatile pairs (V2) */
+  POOL_FACTORY: '0x420DD381b31aEf6683db6B902084cB0FFECe40Da',
+
+  // === Slipstream (Concentrated Liquidity) ===
+  /** Slipstream Swap Router - Entry point for CL swaps */
+  SLIPSTREAM_ROUTER: '0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5',
+  /** Slipstream Factory - Creates CL pools */
+  SLIPSTREAM_FACTORY: '0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A',
+
+  // === Other ===
   /** Universal Router - Advanced routing */
   UNIVERSAL_ROUTER: '0x6Cb442acF35158D5eDa88fe602221b67B400bE3E',
   /** Voter contract for gauge management */
   VOTER: '0x16613524e02ad97eDfeF371bC883F2F5d6C480A5',
-  /** Pool Factory for volatile pairs */
-  POOL_FACTORY: '0x420DD381b31aEf6683db6B902084cB0FFECe40Da',
 } as const
 
 /** Base chain configuration */
@@ -65,7 +78,7 @@ export const AERODROME_ROUTER_ABI = [
 ] as const
 
 /**
- * Aerodrome Pool ABI (for getting pool info)
+ * Aerodrome V2 Pool ABI (for getting pool info - classic AMM)
  */
 export const AERODROME_POOL_ABI = [
   'function token0() view returns (address)',
@@ -77,6 +90,46 @@ export const AERODROME_POOL_ABI = [
   'function totalSupply() view returns (uint256)',
   'function factory() view returns (address)',
   'function metadata() view returns (uint256 dec0, uint256 dec1, uint256 r0, uint256 r1, bool st, address t0, address t1)',
+] as const
+
+/**
+ * Slipstream (CL) Pool ABI - Uniswap V3 style concentrated liquidity
+ * Uses sqrtPriceX96 encoding for price (like Uni V3)
+ */
+export const SLIPSTREAM_POOL_ABI = [
+  'function token0() view returns (address)',
+  'function token1() view returns (address)',
+  'function liquidity() view returns (uint128)',
+  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, bool unlocked)',
+  'function tickSpacing() view returns (int24)',
+] as const
+
+/**
+ * Slipstream Swap Router ABI - for executing CL swaps
+ * Uses exactInputSingle for single-hop swaps
+ */
+export const SLIPSTREAM_ROUTER_ABI = [
+  'function exactInputSingle((address tokenIn, address tokenOut, int24 tickSpacing, address recipient, uint256 deadline, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
+] as const
+
+/**
+ * Slipstream CLFactory ABI - for discovering CL pools
+ * getPool returns a deterministic CREATE2 address - use isPool() to verify it's deployed
+ */
+export const SLIPSTREAM_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, int24 tickSpacing) view returns (address pool)',
+  'function isPool(address pool) view returns (bool)',
+  'function implementation() view returns (address)',
+] as const
+
+/**
+ * V2 Pool Factory ABI - for discovering classic AMM pools
+ * getPool returns the pool address for a token pair + stability type (or zero address if none)
+ */
+export const V2_POOL_FACTORY_ABI = [
+  'function getPool(address tokenA, address tokenB, bool stable) view returns (address pool)',
+  'function allPoolsLength() view returns (uint256)',
+  'function isPaused() view returns (bool)',
 ] as const
 
 /**

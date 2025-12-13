@@ -1,7 +1,11 @@
 /**
  * Aerodrome Swap Execution Tool
- * Executes token swaps on Aerodrome Router
+ * Executes token swaps on Aerodrome DEX (V2 and Slipstream)
  * Returns raw transaction result
+ *
+ * POOL TYPES:
+ * - Slipstream (CL): Uses exactInputSingle with tickSpacing
+ * - V2 (Classic AMM): Uses swapExactTokensForTokens with routes
  *
  * SAFETY: Trades are blocked when:
  * - DRY_RUN=true (recommended for testing)
@@ -22,8 +26,14 @@ import { ethers } from 'ethers'
 import { z } from 'zod'
 
 import type { AerodromeRoute } from '../../config/contracts.js'
-import { AERODROME_CONTRACTS, AERODROME_ROUTER_ABI, createRoute } from '../../config/contracts.js'
+import {
+  AERODROME_CONTRACTS,
+  AERODROME_ROUTER_ABI,
+  SLIPSTREAM_ROUTER_ABI,
+  createRoute,
+} from '../../config/contracts.js'
 import { ENV_CONFIG, TRADING_CONFIG } from '../../config/index.js'
+import { discoverBestPool } from '../../config/pool-discovery.js'
 import { TOKEN_ADDRESSES, resolveToken, shouldUseStablePool } from '../../config/tokens.js'
 import { swapTransactionsRepo } from '../../database/repositories/index.js'
 import { approveToken, getProvider, getWallet, isWalletConfigured } from '../../execution/wallet.js'
@@ -115,9 +125,25 @@ Use 'via' when no direct pool exists (e.g., USDC→BRETT requires routing throug
   execute: async ({ context }) => {
     const { tokenIn, tokenOut, amountIn, minAmountOut, via } = context
 
+    // Determine effective via (ignore if same as tokenIn/tokenOut - LLM hallucination guard)
+    let effectiveVia = via
+    if (via) {
+      const viaUpper = via.toUpperCase()
+      const tokenInUpper = tokenIn.toUpperCase()
+      const tokenOutUpper = tokenOut.toUpperCase()
+      if (viaUpper === tokenInUpper || viaUpper === tokenOutUpper) {
+        console.warn(
+          `  ⚠️ Ignoring invalid 'via' parameter: ${via} (same as ${viaUpper === tokenInUpper ? 'tokenIn' : 'tokenOut'})`
+        )
+        effectiveVia = undefined
+      }
+    }
+
     // SAFETY: Block execution in dry run / test mode to prevent accidental trades
     if (ENV_CONFIG.dryRun || ENV_CONFIG.isTest) {
-      const routeStr = via ? `${tokenIn} → ${via} → ${tokenOut}` : `${tokenIn} → ${tokenOut}`
+      const routeStr = effectiveVia
+        ? `${tokenIn} → ${effectiveVia} → ${tokenOut}`
+        : `${tokenIn} → ${tokenOut}`
       console.log(`🚫 [DRY RUN] Would swap ${amountIn} ${routeStr} (min: ${minAmountOut})`)
       return {
         success: false,
@@ -142,7 +168,8 @@ Use 'via' when no direct pool exists (e.g., USDC→BRETT requires routing throug
     try {
       const tokenInMeta = resolveToken(tokenIn)
       const tokenOutMeta = resolveToken(tokenOut)
-      const viaMeta = via ? resolveToken(via) : null
+      // Use effectiveVia (already validated above) instead of original via
+      const viaMeta = effectiveVia ? resolveToken(effectiveVia) : null
 
       if (!tokenInMeta || !tokenOutMeta) {
         return {
@@ -153,84 +180,133 @@ Use 'via' when no direct pool exists (e.g., USDC→BRETT requires routing throug
         }
       }
 
-      if (via && !viaMeta) {
+      if (effectiveVia && !viaMeta) {
         return {
           success: false,
           tokenIn: { symbol: tokenIn, amount: amountIn },
           tokenOut: { symbol: tokenOut, amountExpected: '0', amountMin: minAmountOut },
-          error: `Unknown intermediate token: ${via}`,
+          error: `Unknown intermediate token: ${effectiveVia}`,
         }
       }
 
+      // viaMeta is already validated (effectiveVia filtered invalid cases)
+      // But do a final address-based check for edge cases (e.g., different symbols same address)
+      const effectiveViaMeta =
+        viaMeta &&
+        viaMeta.address.toLowerCase() !== tokenOutMeta.address.toLowerCase() &&
+        viaMeta.address.toLowerCase() !== tokenInMeta.address.toLowerCase()
+          ? viaMeta
+          : null
+
       const wallet = getWallet()
+      const provider = getProvider()
       const amountInRaw = ethers.parseUnits(amountIn, tokenInMeta.decimals)
       const minAmountOutRaw = ethers.parseUnits(minAmountOut, tokenOutMeta.decimals)
       const deadline = Math.floor(Date.now() / 1000) + TRADING_CONFIG.txDeadlineSeconds
 
-      // Build routes array (single-hop or multi-hop)
-      let routes: AerodromeRoute[]
-      let isStable: boolean
-
-      if (viaMeta) {
-        // Multi-hop: tokenIn → via → tokenOut
-        const isStable1 = shouldUseStablePool(tokenInMeta.symbol, viaMeta.symbol)
-        const isStable2 = shouldUseStablePool(viaMeta.symbol, tokenOutMeta.symbol)
-        routes = [
-          createRoute(tokenInMeta.address, viaMeta.address, isStable1),
-          createRoute(viaMeta.address, tokenOutMeta.address, isStable2),
-        ]
-        isStable = isStable1 && isStable2 // For logging purposes
-        console.log(
-          `🔀 Multi-hop route: ${tokenInMeta.symbol} → ${viaMeta.symbol} → ${tokenOutMeta.symbol}`
-        )
-      } else {
-        // Single-hop: tokenIn → tokenOut (existing behavior)
-        isStable = shouldUseStablePool(tokenIn, tokenOut)
-        routes = [createRoute(tokenInMeta.address, tokenOutMeta.address, isStable)]
-      }
-
-      const router = new ethers.Contract(
-        AERODROME_CONTRACTS.ROUTER_V2,
-        AERODROME_ROUTER_ABI,
-        wallet
-      )
+      // Dynamically discover the best pool for direct swaps (single-hop without via)
+      const discoveredPool = !effectiveViaMeta
+        ? await discoverBestPool(provider, tokenInMeta.address, tokenOutMeta.address)
+        : null
+      const useSlipstream = discoveredPool?.type === 'slipstream' && !effectiveViaMeta
 
       let tx: ethers.ContractTransactionResponse
+      let isStable = false
 
-      // Check if swapping from native ETH
-      const isFromETH = tokenInMeta.address.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()
+      if (useSlipstream && discoveredPool) {
+        // === SLIPSTREAM (CL) SWAP ===
+        console.log(
+          `🔄 Slipstream swap: ${tokenInMeta.symbol} → ${tokenOutMeta.symbol} (tick: ${discoveredPool.tickSpacing})`
+        )
 
-      if (isFromETH) {
-        // Swap ETH for tokens (works with multi-hop routes)
-        const swapEthFn = router.getFunction('swapExactETHForTokens')
-        tx = (await swapEthFn(minAmountOutRaw, routes, wallet.address, deadline, {
-          value: amountInRaw,
-        })) as ethers.ContractTransactionResponse
+        // Approve token spending for Slipstream router
+        await approveToken(tokenInMeta.address, AERODROME_CONTRACTS.SLIPSTREAM_ROUTER, amountInRaw)
+
+        const slipstreamRouter = new ethers.Contract(
+          AERODROME_CONTRACTS.SLIPSTREAM_ROUTER,
+          SLIPSTREAM_ROUTER_ABI,
+          wallet
+        )
+
+        // Build exactInputSingle params
+        const swapParams = {
+          tokenIn: tokenInMeta.address,
+          tokenOut: tokenOutMeta.address,
+          tickSpacing: discoveredPool.tickSpacing ?? 100,
+          recipient: wallet.address,
+          deadline: BigInt(deadline),
+          amountIn: amountInRaw,
+          amountOutMinimum: minAmountOutRaw,
+          sqrtPriceLimitX96: BigInt(0), // No price limit
+        }
+
+        const exactInputSingleFn = slipstreamRouter.getFunction('exactInputSingle')
+        tx = (await exactInputSingleFn(swapParams)) as ethers.ContractTransactionResponse
       } else {
-        // Approve token spending if needed
-        await approveToken(tokenInMeta.address, AERODROME_CONTRACTS.ROUTER_V2, amountInRaw)
+        // === V2 (CLASSIC AMM) SWAP ===
+        // Build routes array (single-hop or multi-hop)
+        let routes: AerodromeRoute[]
 
-        // Check if swapping to native ETH
-        const isToETH = tokenOutMeta.address.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()
-
-        if (isToETH) {
-          const swapToEthFn = router.getFunction('swapExactTokensForETH')
-          tx = (await swapToEthFn(
-            amountInRaw,
-            minAmountOutRaw,
-            routes,
-            wallet.address,
-            deadline
-          )) as ethers.ContractTransactionResponse
+        if (effectiveViaMeta) {
+          // Multi-hop: tokenIn → via → tokenOut
+          const isStable1 = shouldUseStablePool(tokenInMeta.symbol, effectiveViaMeta.symbol)
+          const isStable2 = shouldUseStablePool(effectiveViaMeta.symbol, tokenOutMeta.symbol)
+          routes = [
+            createRoute(tokenInMeta.address, effectiveViaMeta.address, isStable1),
+            createRoute(effectiveViaMeta.address, tokenOutMeta.address, isStable2),
+          ]
+          isStable = isStable1 && isStable2 // For logging purposes
+          console.log(
+            `🔀 Multi-hop route: ${tokenInMeta.symbol} → ${effectiveViaMeta.symbol} → ${tokenOutMeta.symbol}`
+          )
         } else {
-          const swapTokensFn = router.getFunction('swapExactTokensForTokens')
-          tx = (await swapTokensFn(
-            amountInRaw,
-            minAmountOutRaw,
-            routes,
-            wallet.address,
-            deadline
-          )) as ethers.ContractTransactionResponse
+          // Single-hop: tokenIn → tokenOut
+          isStable = shouldUseStablePool(tokenIn, tokenOut)
+          routes = [createRoute(tokenInMeta.address, tokenOutMeta.address, isStable)]
+          console.log(`🔄 V2 swap: ${tokenInMeta.symbol} → ${tokenOutMeta.symbol}`)
+        }
+
+        const router = new ethers.Contract(
+          AERODROME_CONTRACTS.ROUTER_V2,
+          AERODROME_ROUTER_ABI,
+          wallet
+        )
+
+        // Check if swapping from native ETH
+        const isFromETH = tokenInMeta.address.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()
+
+        if (isFromETH) {
+          // Swap ETH for tokens (works with multi-hop routes)
+          const swapEthFn = router.getFunction('swapExactETHForTokens')
+          tx = (await swapEthFn(minAmountOutRaw, routes, wallet.address, deadline, {
+            value: amountInRaw,
+          })) as ethers.ContractTransactionResponse
+        } else {
+          // Approve token spending if needed
+          await approveToken(tokenInMeta.address, AERODROME_CONTRACTS.ROUTER_V2, amountInRaw)
+
+          // Check if swapping to native ETH
+          const isToETH = tokenOutMeta.address.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()
+
+          if (isToETH) {
+            const swapToEthFn = router.getFunction('swapExactTokensForETH')
+            tx = (await swapToEthFn(
+              amountInRaw,
+              minAmountOutRaw,
+              routes,
+              wallet.address,
+              deadline
+            )) as ethers.ContractTransactionResponse
+          } else {
+            const swapTokensFn = router.getFunction('swapExactTokensForTokens')
+            tx = (await swapTokensFn(
+              amountInRaw,
+              minAmountOutRaw,
+              routes,
+              wallet.address,
+              deadline
+            )) as ethers.ContractTransactionResponse
+          }
         }
       }
 
@@ -249,7 +325,6 @@ Use 'via' when no direct pool exists (e.g., USDC→BRETT requires routing throug
           const amountOutUsd = amountOutNum * tokenOutPriceUsd
 
           // Get gas cost in USD (ETH price * gas used * gas price)
-          const provider = getProvider()
           const feeData = await provider.getFeeData()
           const gasUsedBn = receipt.gasUsed
           const gasPriceGwei = feeData.gasPrice
@@ -276,7 +351,7 @@ Use 'via' when no direct pool exists (e.g., USDC→BRETT requires routing throug
             tokenOutAddress: tokenOutMeta.address,
             amountOut: minAmountOut,
             amountOutUsd: amountOutUsd.toFixed(2),
-            poolAddress: routes[0].from, // First hop's input token address
+            poolAddress: discoveredPool?.address ?? tokenInMeta.address, // Pool address or input token
             isStablePool: isStable,
             gasUsed: Number(gasUsedBn),
             gasPriceGwei: gasPriceGwei.toFixed(4),

@@ -200,6 +200,7 @@ Return your decision as JSON with this structure:
 
   let diaryId: string | null = null
   let responseText = ''
+  let executeSwapCalled = false
 
   try {
     const response = await aerodromeAgent.generate(prompt, {
@@ -214,6 +215,11 @@ Return your decision as JSON with this structure:
             })
             .join(', ')
           console.log(`  📞 Agent called: ${toolNames}`)
+
+          // Track if executeSwap was called (for non-EigenAI providers)
+          if (toolNames.includes('executeSwap')) {
+            executeSwapCalled = true
+          }
         }
       },
     })
@@ -225,6 +231,13 @@ Return your decision as JSON with this structure:
     const decision = parseAgentDecision(responseText)
 
     if (decision) {
+      // Detect if trade was executed:
+      // 1. executeSwap tool was called (Anthropic/OpenAI agents)
+      // 2. EigenAI appended [EXECUTED: TX ...] or [DRY RUN: ...] to rationale
+      const rationaleIndicatesExecution =
+        decision.rationale?.includes('[EXECUTED: TX') || decision.rationale?.includes('[DRY RUN:')
+      const wasExecuted = executeSwapCalled || rationaleIndicatesExecution
+
       const entry = await tradingDiaryRepo.logDecision({
         iterationNumber: ctx.iterationNumber,
         timestamp: new Date(ctx.timestamp),
@@ -234,10 +247,10 @@ Return your decision as JSON with this structure:
         amountUsd: decision.amountUsd?.toString(),
         reasoning: decision.reasoning,
         rationale: decision.rationale,
-        executed: false,
+        executed: wasExecuted,
       })
       diaryId = entry.id
-      console.log(`📝 Logged decision to diary: ${diaryId}`)
+      console.log(`📝 Logged decision to diary: ${diaryId}${wasExecuted ? ' (EXECUTED)' : ''}`)
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'

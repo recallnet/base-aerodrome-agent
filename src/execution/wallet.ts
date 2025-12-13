@@ -59,11 +59,21 @@ export function getAlchemy(): Alchemy {
 
 /**
  * Get the JSON-RPC provider for Base chain (for contract calls)
+ * Uses Alchemy if ALCHEMY_API_KEY is set, otherwise falls back to BASE_RPC_URL or public RPC
  * @returns Provider instance
  */
 export function getProvider(): ethers.JsonRpcProvider {
   if (!providerInstance) {
-    const rpcUrl = process.env.BASE_RPC_URL || API_CONFIG.defaultRpcUrl
+    // Priority: BASE_RPC_URL > Alchemy from API key > public fallback
+    let rpcUrl = process.env.BASE_RPC_URL
+    if (!rpcUrl) {
+      const alchemyKey = process.env.ALCHEMY_API_KEY
+      if (alchemyKey) {
+        rpcUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`
+      } else {
+        rpcUrl = API_CONFIG.defaultRpcUrl
+      }
+    }
     // Use staticNetwork to prevent ethers from re-querying network on each call
     providerInstance = new ethers.JsonRpcProvider(
       rpcUrl,

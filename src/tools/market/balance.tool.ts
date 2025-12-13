@@ -49,6 +49,7 @@ Use this to check available funds before trading.`,
     const { tokens } = context
 
     if (!isWalletConfigured()) {
+      console.error(`  ❌ getWalletBalance FAILED: Wallet not configured`)
       return {
         success: false,
         walletAddress: null,
@@ -100,6 +101,7 @@ Use this to check available funds before trading.`,
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      console.error(`  ❌ getWalletBalance FAILED: ${errorMessage}`)
       return {
         success: false,
         walletAddress: null,

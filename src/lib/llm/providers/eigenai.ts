@@ -22,6 +22,7 @@ import type {
 import { APICallError } from 'ai'
 import { privateKeyToAccount } from 'viem/accounts'
 
+import { executeSwapTool, getQuoteTool } from '../../../tools/index.js'
 import {
   DEFAULT_MODELS,
   type EigenAIChatCompletionResponse,
@@ -276,6 +277,124 @@ function mapFinishReason(reason: string | null): LanguageModelV2FinishReason {
 }
 
 // =============================================================================
+// Trade Execution from Qwen Decision (EigenAI-specific)
+// =============================================================================
+
+/**
+ * Parse qwen's JSON decision and execute the trade if it's a BUY/SELL
+ *
+ * This is EigenAI-specific because qwen can't call tools directly.
+ * For Anthropic/OpenAI, the agent would call executeSwap as a tool.
+ *
+ * @param qwenContent - The JSON response from qwen
+ * @returns Updated JSON with execution result, or null if no trade needed
+ */
+async function executeTradeFromDecision(qwenContent: string): Promise<string | null> {
+  if (!qwenContent) return null
+
+  try {
+    // Parse the JSON decision
+    const jsonMatch = qwenContent.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return null
+
+    const decision = JSON.parse(jsonMatch[0]) as {
+      reasoning?: string
+      trade_decisions?: Array<{
+        token?: string
+        action?: string
+        amount_usd?: number
+        via?: string | null
+        rationale?: string
+      }>
+    }
+
+    // Check if there's a BUY or SELL decision
+    const tradeDecision = decision.trade_decisions?.[0]
+    if (!tradeDecision) return null
+
+    const action = tradeDecision.action?.toUpperCase()
+    if (action !== 'BUY' && action !== 'SELL') return null
+
+    const amountUsd = tradeDecision.amount_usd
+    if (!amountUsd || amountUsd < 1) {
+      console.log(`[EigenAI] Skipping trade execution: amount too small ($${amountUsd ?? 0})`)
+      return null
+    }
+
+    const token = tradeDecision.token?.toUpperCase()
+    if (!token) return null
+
+    // Get via parameter for multi-hop routing (qwen decides this based on token pairs)
+    const via = tradeDecision.via?.toUpperCase() || undefined
+
+    // Determine swap direction
+    // BUY: USDC → token
+    // SELL: token → USDC
+    const tokenIn = action === 'BUY' ? 'USDC' : token
+    const tokenOut = action === 'BUY' ? token : 'USDC'
+
+    const routeStr = via ? `${tokenIn} → ${via} → ${tokenOut}` : `${tokenIn} → ${tokenOut}`
+    console.log(`[EigenAI] Executing ${action}: $${amountUsd} ${routeStr}`)
+
+    // Step 1: Get a quote (with via if multi-hop)
+    const quoteResult = await getQuoteTool.execute({
+      context: {
+        tokenIn,
+        tokenOut,
+        amountIn: amountUsd.toString(),
+        ...(via ? { via } : {}),
+      },
+      runtimeContext: {} as never,
+    })
+
+    if (!quoteResult.success || !quoteResult.tokenOut.amountOut) {
+      console.error(`[EigenAI] Quote failed: ${quoteResult.error}`)
+      // Return original decision with execution error
+      decision.trade_decisions![0].rationale = `${tradeDecision.rationale} [EXECUTION FAILED: Quote error - ${quoteResult.error}]`
+      return JSON.stringify(decision)
+    }
+
+    const expectedAmountOut = quoteResult.tokenOut.amountOut
+    console.log(`[EigenAI] Quote: ${amountUsd} ${tokenIn} → ${expectedAmountOut} ${tokenOut}`)
+
+    // Step 2: Apply slippage (1%)
+    const slippagePercent = 1.0
+    const expectedOut = parseFloat(expectedAmountOut)
+    const minAmountOut = (expectedOut * (1 - slippagePercent / 100)).toFixed(8)
+
+    // Step 3: Execute the swap (with via if multi-hop)
+    const swapResult = await executeSwapTool.execute({
+      context: {
+        tokenIn,
+        tokenOut,
+        amountIn: amountUsd.toString(),
+        minAmountOut,
+        slippagePercent,
+        ...(via ? { via } : {}),
+      },
+      runtimeContext: {} as never,
+    })
+
+    // Update the decision with execution result
+    if (swapResult.success && swapResult.txHash) {
+      console.log(`[EigenAI] ✅ Trade executed! TX: ${swapResult.txHash}`)
+      decision.trade_decisions![0].rationale = `${tradeDecision.rationale} [EXECUTED: TX ${swapResult.txHash}]`
+    } else if (swapResult.dryRun) {
+      console.log(`[EigenAI] 🚫 DRY RUN - Trade simulated but not executed`)
+      decision.trade_decisions![0].rationale = `${tradeDecision.rationale} [DRY RUN: Trade simulated only]`
+    } else {
+      console.error(`[EigenAI] ❌ Trade failed: ${swapResult.error}`)
+      decision.trade_decisions![0].rationale = `${tradeDecision.rationale} [EXECUTION FAILED: ${swapResult.error}]`
+    }
+
+    return JSON.stringify(decision)
+  } catch (error) {
+    console.error('[EigenAI] Error executing trade from decision:', error)
+    return null // Return null to fall through to original qwenContent
+  }
+}
+
+// =============================================================================
 // EigenAI Model Implementation
 // =============================================================================
 
@@ -477,10 +596,16 @@ Required JSON format:
       "token": "TOKEN_SYMBOL",
       "action": "BUY" | "SELL" | "HOLD",
       "amount_usd": number,
+      "via": "WETH" | null,
       "rationale": "Why this specific action..."
     }
   ]
 }
+
+IMPORTANT for multi-hop routing:
+- If the token doesn't have a direct pool with USDC (e.g., meme coins like BRETT, PONKE), set "via": "WETH"
+- If the token has a direct USDC pool (e.g., WETH, AERO), set "via": null
+- WETH is the main hub token on Aerodrome - most tokens pair with it
 
 If no clear opportunity exists, use action "HOLD" for all positions.
 Your response must start with { and end with } - no other text allowed.`
@@ -578,8 +703,12 @@ Your response must start with { and end with } - no other text allowed.`
         }
       }
 
-      // Return the qwen response (should be JSON)
+      // Parse qwen response and execute trade if BUY/SELL
+      const executedContent = await executeTradeFromDecision(qwenContent)
+
+      // Return the qwen response (with execution result appended if trade was executed)
       return (
+        executedContent ||
         qwenContent ||
         JSON.stringify({
           reasoning: 'Qwen returned empty response. Defaulting to HOLD.',

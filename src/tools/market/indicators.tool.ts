@@ -200,6 +200,7 @@ Requires COINGECKO_API_KEY environment variable.`,
     const tokenMeta = resolveToken(token)
 
     if (!tokenMeta) {
+      console.error(`  ❌ getIndicators FAILED: Unknown token: ${token}`)
       return {
         success: false,
         token: { symbol: token, address: '' },
@@ -230,6 +231,10 @@ Requires COINGECKO_API_KEY environment variable.`,
     }
 
     const success = (intradayData !== null || longTermData !== null) && errors.length === 0
+
+    if (!success) {
+      console.error(`  ❌ getIndicators FAILED for ${tokenMeta.symbol}: ${errors.join(', ')}`)
+    }
 
     return {
       success,

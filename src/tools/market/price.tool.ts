@@ -126,10 +126,14 @@ Use this to check current token prices.`,
   execute: async ({ context }) => {
     const { token } = context
 
+    // Debug: log raw input to catch model hallucinations
+    console.log(`  🔍 getTokenPrice input: token="${token}"`)
+
     try {
       const tokenMeta = resolveToken(token)
 
       if (!tokenMeta) {
+        console.error(`  ❌ getTokenPrice FAILED: Unknown token: ${token}`)
         return {
           success: false,
           token: { symbol: token, address: '' },
@@ -141,6 +145,10 @@ Use this to check current token prices.`,
       }
 
       const data = await fetchDexScreenerData(tokenMeta.address)
+
+      if (data.priceUsd === null) {
+        console.error(`  ❌ getTokenPrice FAILED: No price data for ${tokenMeta.symbol}`)
+      }
 
       return {
         success: data.priceUsd !== null,
@@ -161,6 +169,7 @@ Use this to check current token prices.`,
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      console.error(`  ❌ getTokenPrice FAILED: ${errorMessage}`)
       return {
         success: false,
         token: { symbol: token, address: '' },

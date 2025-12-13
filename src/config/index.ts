@@ -6,6 +6,7 @@ import { DEFAULT_TRADING_PAIRS } from './tokens.js'
 
 export * from './tokens.js'
 export * from './contracts.js'
+export * from './pools.js'
 
 /** Trading pair structure */
 export interface TradingPair {
